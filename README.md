@@ -4,10 +4,7 @@ A Rust BPE tokenizer with a Python API and UTF-8 support.
 
 ```sh
 git clone https://github.com/poytaytoy/MiniTokenizer.git
-cd MiniTokenizer
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install .
+python -m pip install ./MiniTokenizer
 ```
 
 Requires Python 3.10+ and Rust to build the extension.
