@@ -1,4 +1,3 @@
-use crate::character::extract_char;
 use std::ops::Index;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -12,7 +11,7 @@ pub struct Token {
 #[derive(Debug)]
 pub struct WordArena {
     byte_offsets: Vec<usize>,
-    pub word: Vec<u8>, // Make it a vec with a fixed capacity
+    pub word: String,
     pub token_arena: Vec<Token>,
     pub count: usize,
     pub id: usize,
@@ -20,19 +19,16 @@ pub struct WordArena {
 
 impl WordArena {
     pub fn new(word: &[u8], id: usize) -> WordArena {
-        let characters = extract_char(word).expect("WordArena requires valid UTF-8");
-        let mut byte_offsets = Vec::with_capacity(characters.len());
-        let mut offset = 0;
-        for character in &characters {
-            byte_offsets.push(offset);
-            offset += character.character.len();
-        }
-        let word = word.to_vec();
-        let mut token_arena = Vec::with_capacity(characters.len());
+        let word = std::str::from_utf8(word)
+            .expect("WordArena requires valid UTF-8")
+            .to_owned();
+        let byte_offsets: Vec<usize> = word.char_indices().map(|(offset, _)| offset).collect();
+        let character_count = byte_offsets.len();
+        let mut token_arena = Vec::with_capacity(character_count);
 
-        for i in 0..characters.len() {
+        for i in 0..character_count {
             let back = if i == 0 { usize::MAX } else { i - 1 };
-            let next = if i + 1 >= characters.len() {
+            let next = if i + 1 >= character_count {
                 usize::MAX
             } else {
                 i + 1
@@ -105,14 +101,14 @@ impl WordArena {
 
     pub fn cmp_from_u8(&self, token: Token, cmp: &[u8]) -> bool {
         let next = self._next(token.next);
-        let token = &self.word[self.byte_offsets[token.start]..next];
+        let token = &self.word.as_bytes()[self.byte_offsets[token.start]..next];
         cmp == token
     }
 
     pub fn get_word_splice(&self, index: usize) -> &[u8] {
         let token = &self.token_arena[index];
         let end = self._next(token.next);
-        &self.word[self.byte_offsets[token.start]..end]
+        &self.word.as_bytes()[self.byte_offsets[token.start]..end]
     }
 
     pub fn len(&self) -> usize {
@@ -134,7 +130,7 @@ mod test_word_arena {
     #[test]
     fn test_word_arena_new() {
         let word_arena = WordArena::new(&[1, 2, 3], 0);
-        assert_eq!(word_arena.word, &[1, 2, 3]);
+        assert_eq!(word_arena.word, "\u{1}\u{2}\u{3}");
         assert_eq!(word_arena.count, 0);
         assert_eq!(word_arena.id, 0);
         assert_eq!(word_arena.token_arena.len(), 3);

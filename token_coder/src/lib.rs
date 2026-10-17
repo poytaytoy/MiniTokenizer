@@ -1,6 +1,5 @@
 pub mod decode;
 pub mod encode;
-pub mod character; 
 pub mod splice;
 pub mod wordarena;
 
