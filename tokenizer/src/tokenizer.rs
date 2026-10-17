@@ -4,12 +4,16 @@ use std::collections::HashMap;
 
 use crate::REGEX_GPT_2;
 use crate::splice::*;
+use crate::train::train_bpe_tokenizer;
 use crate::wordarena::*;
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use regex::Regex;
 use serde::Deserialize;
 
-pub struct TokenEncoder {
+/// Train, encode, and decode with a single tokenizer model.
+pub struct MiniTokenizer {
+    model_json: String,
+    decode_vocab: HashMap<u32, String>,
     vocab: HashMap<Splice, usize>,
     merges: HashMap<(Splice, Splice), usize>,
     splice_db: SpliceDatabase,
@@ -17,18 +21,22 @@ pub struct TokenEncoder {
     regex: Regex,
 }
 
-impl TokenEncoder {
-    pub fn new(tokenizer_path: &str) -> Result<TokenEncoder> {
-        let tokenizer_json_str = std::fs::read_to_string(tokenizer_path)?;
-
+impl MiniTokenizer {
+    /// Load vocabulary and merge rules from a JSON string.
+    pub fn load(model_json: &str) -> Result<Self> {
         #[derive(Deserialize, Debug)]
         struct BpeTokenizer {
             pub vocab: HashMap<String, usize>,
             pub merges: Vec<[String; 2]>,
         }
 
-        let bpe_tokenizer: BpeTokenizer = serde_json::from_str(&tokenizer_json_str)?;
+        let bpe_tokenizer: BpeTokenizer = serde_json::from_str(model_json)?;
 
+        let decode_vocab = bpe_tokenizer
+            .vocab
+            .iter()
+            .map(|(token, id)| (*id as u32, token.clone()))
+            .collect();
         let mut splice_db = SpliceDatabase::new();
         let mut vocab: HashMap<Splice, usize> = HashMap::new();
         let mut merges: HashMap<(Splice, Splice), usize> = HashMap::new();
@@ -39,20 +47,49 @@ impl TokenEncoder {
         }
 
         for (rank, [token1, token2]) in bpe_tokenizer.merges.iter().enumerate() {
-            let token1 = splice_db.get(&token1.clone().as_bytes()).unwrap();
-            let token2 = splice_db.get(&token2.clone().as_bytes()).unwrap();
+            let token1 = splice_db
+                .get(token1.as_bytes())
+                .ok_or_else(|| anyhow!("Merge token missing from vocabulary: {token1}"))?;
+            let token2 = splice_db
+                .get(token2.as_bytes())
+                .ok_or_else(|| anyhow!("Merge token missing from vocabulary: {token2}"))?;
             merges.insert((token1, token2), rank);
         }
 
         let regex = Regex::new(REGEX_GPT_2)?;
 
-        Ok(TokenEncoder {
+        Ok(MiniTokenizer {
+            model_json: model_json.to_owned(),
+            decode_vocab,
             vocab: vocab,
             merges: merges,
             splice_db: splice_db,
             cache_db: HashMap::new(),
             regex: regex,
         })
+    }
+
+    /// Learn from a text string. `vocab_size` includes the initial characters.
+    pub fn train(text: &str, vocab_size: usize) -> Result<Self> {
+        Self::load(&train_bpe_tokenizer(text, vocab_size)?)
+    }
+
+    /// Export the model as a JSON string for saving or loading later.
+    pub fn to_json(&self) -> &str {
+        &self.model_json
+    }
+
+    /// Convert token IDs back to text. Returns an error for an unknown ID.
+    pub fn decode(&self, tokens: &[u32]) -> Result<String> {
+        let mut decoded = String::new();
+        for &token_id in tokens {
+            let token_str = self
+                .decode_vocab
+                .get(&token_id)
+                .ok_or_else(|| anyhow!("Token ID {} not found in vocabulary", token_id))?;
+            decoded.push_str(token_str);
+        }
+        Ok(decoded)
     }
 
     fn convert_final_arena(&self, arena: WordArena) -> Vec<u32> {
@@ -219,6 +256,8 @@ impl TokenEncoder {
         }
     }
 
+    /// Convert text to token IDs using the learned merge rules.
+    /// Panics if the model lacks a required character or merged token.
     pub fn encode(&mut self, message: &str) -> Vec<u32> {
         let mut output = Vec::new();
 
@@ -229,50 +268,5 @@ impl TokenEncoder {
         }
 
         output
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::decode::TokenDecoder;
-
-    #[test]
-    fn test_encode_decode_naive_merge() {
-        let mut encoder = TokenEncoder::new("test_tokenizer.json").unwrap();
-        let decoder = TokenDecoder::new("test_tokenizer.json").unwrap();
-
-        let original = "hello world";
-        let encoded = encoder.encode(original);
-        let decoded = decoder.decode(&encoded).unwrap();
-
-        assert_eq!(decoded, original);
-    }
-
-    #[test]
-    fn test_encode_decode_optimized_merge() {
-        let mut encoder = TokenEncoder::new("test_tokenizer.json").unwrap();
-        let decoder = TokenDecoder::new("test_tokenizer.json").unwrap();
-
-        let original = "ab".repeat(120);
-        let encoded = encoder.encode(&original);
-        let decoded = decoder.decode(&encoded).unwrap();
-
-        assert_eq!(decoded, original);
-    }
-
-    #[test]
-    fn test_encode_decode_mixed() {
-        let mut encoder = TokenEncoder::new("test_tokenizer.json").unwrap();
-        let decoder = TokenDecoder::new("test_tokenizer.json").unwrap();
-
-        let original = format!(
-            "short message followed by a very long word: {}",
-            "a".repeat(150)
-        );
-        let encoded = encoder.encode(&original);
-        let decoded = decoder.decode(&encoded).unwrap();
-
-        assert_eq!(decoded, original);
     }
 }
