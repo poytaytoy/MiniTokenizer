@@ -1,0 +1,3 @@
+[workspace]
+members = ["token_coder"]
+resolver = "3"
